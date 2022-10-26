@@ -1,0 +1,61 @@
+From 6879e421468965c264f65f170fe176349bd8b64b Mon Sep 17 00:00:00 2001
+From: Michael Forney <mforney@mforney.org>
+Date: Wed, 26 Oct 2022 16:41:23 -0700
+Subject: [PATCH] exportfs: allow attaching to fids using special aname
+
+---
+ sys/src/cmd/exportfs/exportsrv.c | 24 ++++++++++++++++++++----
+ 1 file changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/sys/src/cmd/exportfs/exportsrv.c b/sys/src/cmd/exportfs/exportsrv.c
+index 3bd9e3aeb..b49a3964a 100644
+--- a/sys/src/cmd/exportfs/exportsrv.c
++++ b/sys/src/cmd/exportfs/exportsrv.c
+@@ -84,8 +84,8 @@ Xattach(Fsrpc *t)
+ {
+ 	int i, nfd;
+ 	Fcall rhdr;
+-	Fid *f;
+-	char buf[128];
++	Fid *f, *sf;
++	char buf[128], *path;
+ 
+ 	f = newfid(t->work.fid);
+ 	if(f == nil) {
+@@ -94,7 +94,7 @@ Xattach(Fsrpc *t)
+ 		return;
+ 	}
+ 
+-	if(srvfd >= 0){
++	if(srvfd >= 0 || *t->work.aname){
+ 		if(psmpt == nil){
+ 		Nomount:
+ 			reply(&t->work, &rhdr, Enopsmt);
+@@ -112,7 +112,23 @@ Xattach(Fsrpc *t)
+ 		if(f->f == nil)
+ 			goto Nomount;
+ 		sprint(buf, "/mnt/exportfs/%d", i);
+-		nfd = dup(srvfd, -1);
++		if(srvfd >= 0)
++			nfd = dup(srvfd, -1);
++		else{
++			if(strlen(t->work.aname) < 12)
++				goto Nomount;
++			sf = getfid(atoi(t->work.aname));
++			if(sf == nil) {
++				reply(&t->work, &rhdr, Ebadfid);
++				freefid(t->work.fid);
++				putsbuf(t);
++				return;
++			}
++			path = makepath(sf->f, "");
++			nfd = open(path, ORDWR);
++			free(path);
++			t->work.aname += 12;
++		}
+ 		if(amount(nfd, buf, MREPL|MCREATE, t->work.aname) == -1){
+ 			errstr(buf, sizeof buf);
+ 			reply(&t->work, &rhdr, buf);
+-- 
+2.37.3
+
