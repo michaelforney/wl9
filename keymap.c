@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: ISC */
+#include <assert.h>
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -66,6 +67,14 @@ static const char xkbnames[] =
 	"Control_L\0"
 	"End\0"
 	"Scroll_Lock\0"
+	"XF86AudioPrev\0"
+	"XF86AudioNext\0"
+	"XF86AudioPlay\0"
+	"XF86AudioLowerVolume\0"
+	"XF86AudioRaiseVolume\0"
+	"XF86AudioMute\0"
+	"XF86MonBrightnessDown\0"
+	"XF86MonBrightnessUp\0"
 	"Down\0"
 	"Break\0"
 	"Caps_Lock\0"
@@ -93,41 +102,49 @@ static const uint_least16_t xkbascii[128] = {
 };
 
 static const uint_least16_t xkbextra[][2] = {
-	{0xF001, 436},  /* KF|1    → F1          */
-	{0xF002, 439},  /* KF|2    → F2          */
-	{0xF003, 442},  /* KF|3    → F3          */
-	{0xF004, 445},  /* KF|4    → F4          */
-	{0xF005, 448},  /* KF|5    → F5          */
-	{0xF006, 451},  /* KF|6    → F6          */
-	{0xF007, 454},  /* KF|7    → F7          */
-	{0xF008, 457},  /* KF|8    → F8          */
-	{0xF009, 460},  /* KF|9    → F9          */
-	{0xF00A, 463},  /* KF|10   → F10         */
-	{0xF00B, 467},  /* KF|11   → F11         */
-	{0xF00C, 471},  /* KF|12   → F12         */
-	{0xF00D, 475},  /* Khome   → Home        */
-	{0xF00E, 480},  /* Kup     → Up          */
-	{0xF00F, 483},  /* Kpgup   → Prior       */
-	{0xF010, 489},  /* Kprint  → Print       */
-	{0xF011, 495},  /* Kleft   → Left        */
-	{0xF012, 500},  /* Kright  → Right       */
-	{0xF013, 506},  /* Kpgdown → Next        */
-	{0xF014, 511},  /* Kins    → Insert      */
-	{0xF015, 518},  /* Kalt    → Alt_L       */
-	{0xF016, 524},  /* Kshift  → Shift_L     */
-	{0xF017, 532},  /* Kctl    → Control_L   */
-	{0xF018, 542},  /* Kend    → End         */
-	{0xF019, 546},  /* Kscroll → Scroll_Lock */
-	{0xF800, 558},  /* Kdown   → Down        */
-	{0xF861, 563},  /* Kbreak  → Break       */
-	{0xF864, 569},  /* Kcaps   → Caps_Lock   */
-	{0xF865, 579},  /* Knum    → Num_Lock    */
-	{0xF867, 588},  /* Kaltgr  → Alt_R       */
-	{0xF868, 594},  /* Kmod4   → Super_L     */
+	{0xF001, 436},  // KF|1    → F1
+	{0xF002, 439},  // KF|2    → F2
+	{0xF003, 442},  // KF|3    → F3
+	{0xF004, 445},  // KF|4    → F4
+	{0xF005, 448},  // KF|5    → F5
+	{0xF006, 451},  // KF|6    → F6
+	{0xF007, 454},  // KF|7    → F7
+	{0xF008, 457},  // KF|8    → F8
+	{0xF009, 460},  // KF|9    → F9
+	{0xF00A, 463},  // KF|10   → F10
+	{0xF00B, 467},  // KF|11   → F11
+	{0xF00C, 471},  // KF|12   → F12
+	{0xF00D, 475},  // Khome   → Home
+	{0xF00E, 480},  // Kup     → Up
+	{0xF00F, 483},  // Kpgup   → Prior
+	{0xF010, 489},  // Kprint  → Print
+	{0xF011, 495},  // Kleft   → Left
+	{0xF012, 500},  // Kright  → Right
+	{0xF013, 506},  // Kpgdown → Next
+	{0xF014, 511},  // Kins    → Insert
+	{0xF015, 518},  // Kalt    → Alt_L
+	{0xF016, 524},  // Kshift  → Shift_L
+	{0xF017, 532},  // Kctl    → Control_L
+	{0xF018, 542},  // Kend    → End
+	{0xF019, 546},  // Kscroll → Scroll_Lock
+	{0xF022, 558},  // Ksbwd   → XF86AudioPrev
+	{0xF023, 572},  // Ksfwd   → XF86AudioNext
+	{0xF024, 586},  // Kpause  → XF86AudioPlay
+	{0xF025, 600},  // Kvoldn  → XF86AudioLowerVolume
+	{0xF026, 621},  // Kvolup  → XF86AudioRaiseVolume
+	{0xF027, 642},  // Kmute   → XF86AudioMute
+	{0xF028, 656},  // Kbrtdn  → XF86MonBrightnessDown
+	{0xF029, 678},  // Kbrtup  → XF86MonBrightnessUp
+	{0xF800, 698},  // Kdown   → Down
+	{0xF861, 703},  // Kbreak  → Break
+	{0xF864, 709},  // Kcaps   → Caps_Lock
+	{0xF865, 719},  // Knum    → Num_Lock
+	{0xF867, 728},  // Kaltgr  → Alt_R
+	{0xF868, 734},  // Kmod4   → Super_L
 };
 
 static const char xkbtypes[] =
-	"xkb_types \"(unnamed)\" {\n"
+	"xkb_types \"plan9\" {\n"
 	"	type \"ONE_LEVEL\" {\n"
 	"		modifiers = none;\n"
 	"		level_name[1] = \"Any\";\n"
@@ -156,7 +173,7 @@ static const char xkbtypes[] =
 	"};\n";
 
 static const char xkbcompat[] =
-	"xkb_compat \"(unnamed)\" {\n"
+	"xkb_compat \"plan9\" {\n"
 	"	interpret Shift_L {\n"
 	"		action = SetMods(modifiers=Shift,clearLocks);\n"
 	"	};\n"
@@ -174,8 +191,7 @@ static const char xkbmods[] =
 
 struct key {
 	uint_least16_t scan;
-	uint_least16_t rune;
-	uint_least16_t name[10];
+	uint_least16_t rune[10];
 };
 
 static int
@@ -188,17 +204,24 @@ u16cmp(const void *a, const void *b)
 	return ra < rb ? -1 : ra > rb;
 }
 
-static unsigned
+static const char *
 runetoxkb(unsigned long r)
 {
+	static char name[8];
 	uint_least16_t *k;
+	unsigned i;
 
-	if (r > 0xFFFF)
-		return 0;
-	if (r < 128)
-		return xkbascii[r];
-	k = bsearch(&(uint_least16_t){r}, xkbextra, LEN(xkbextra), sizeof *xkbextra, u16cmp);
-	return k ? k[1] : 0;
+	assert(r != 0 && r <= 0x10FFFF);
+	if (r < 128) {
+		i = xkbascii[r];
+	} else {
+		k = bsearch(&(uint_least16_t){r}, xkbextra, LEN(xkbextra), sizeof *xkbextra, u16cmp);
+		i = k ? k[1] : 0;
+	}
+	if (i)
+		return xkbnames + i;
+	snprintf(name, sizeof name, "U%.4lX", r);
+	return name;
 }
 
 int
@@ -208,12 +231,11 @@ writekeymap(FILE *f, int (*nextline)(void *, char **, size_t *), void *aux)
 	size_t len;
 	int ret;
 	unsigned long level, scan, rune;
-	unsigned name;
 	struct key *keys, *k;
 	size_t keyslen, i;
 
 	fputs("xkb_keymap {\n", f);
-	fputs("xkb_keycodes \"(unnamed)\" {\n", f);
+	fputs("xkb_keycodes \"plan9\" {\n", f);
 	keys = NULL;
 	keyslen = 0;
 	for (;;) {
@@ -227,14 +249,15 @@ writekeymap(FILE *f, int (*nextline)(void *, char **, size_t *), void *aux)
 		level = strtoul(pos, &pos, 10);
 		scan = strtoul(pos, &pos, 10);
 		rune = strtoul(pos, &pos, 10);
-		name = runetoxkb(rune);
-		if (!name)
+		if (rune == 0 || rune > 0x10ffff)
 			continue;
-		if (level == 2)
-			scan |= 0x8000;
-		if (level == 0 || level == 2) {
+		switch (level) {
+		case 2: /* esc1 */
+		case 5: /* esc1 ctrl */
+		case 6: /* esc1 shift */
+		case 0:
 			for (k = keys; k < keys + keyslen; ++k) {
-				if (k->rune == rune)
+				if (k->rune[0] == rune)
 					break;
 			}
 			if (k < keys + keyslen) {
@@ -243,7 +266,7 @@ writekeymap(FILE *f, int (*nextline)(void *, char **, size_t *), void *aux)
 				codes that map to the same rune at
 				level 0, so use the first one
 				*/
-				//fprintf(stderr, "duplicate key %lu %lu %s\n", level, scan, xkbnames + name);
+				//fprintf(stderr, "duplicate key %lu %.2lx %s\n", level, scan, runetoxkb(rune));
 				continue;
 			}
 			if ((keyslen & keyslen - 1) == 0 && keyslen - 1 > 127) {
@@ -255,29 +278,28 @@ writekeymap(FILE *f, int (*nextline)(void *, char **, size_t *), void *aux)
 			}
 			k = &keys[keyslen++];
 			k->scan = scan;
-			k->rune = rune;
-			k->name[0] = name;
-			memset(k->name + 1, 0, sizeof k->name - sizeof k->name[0]);
+			k->rune[0] = rune;
+			memset(k->rune + 1, 0, sizeof k->rune - sizeof k->rune[0]);
 			fprintf(f, "\t<U+%.4lX> = 0x%.4lX;\n", rune, rune + 8);
-		} else {
+			break;
+		default:
 			k = bsearch(&(uint_least16_t){scan}, keys, keyslen, sizeof *keys, u16cmp);
 			if (!k)
 				continue;  /* no unshifted rune */
-			if (level == 5 || level == 6)
-				continue;  /* levels involving esc1 */
-			k->name[level] = runetoxkb(rune);
+			k->rune[level] = rune;
+			break;
 		}
 	}
 	fputs("};\n", f);
 	fwrite(xkbtypes, 1, sizeof xkbtypes - 1, f);
 	fwrite(xkbcompat, 1, sizeof xkbcompat - 1, f);
-	fputs("xkb_symbols \"(unnamed)\" {\n", f);
+	fputs("xkb_symbols \"plan9\" {\n", f);
 	for (i = 0; i < keyslen; ++i) {
 		k = &keys[i];
-		fprintf(f, "\tkey <U+%.4"PRIXLEAST32"> {[%s", k->rune, xkbnames + k->name[0]);
-		if (k->name[1])
-			fprintf(f, ", %s", xkbnames + k->name[1]);
-		fprintf(f, "]};\n");
+		fprintf(f, "\tkey <U+%.4"PRIXLEAST32"> {[%s", k->rune[0], runetoxkb(k->rune[0]));
+		if (k->rune[1] && k->rune[1] != k->rune[0])
+			fprintf(f, ", %s", runetoxkb(k->rune[1]));
+		fputs("]};\n", f);
 	}
 	fwrite(xkbmods, 1, sizeof xkbmods - 1, f);
 	fputs("};\n", f);
