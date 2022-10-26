@@ -690,7 +690,7 @@ kbdread(C9r *reply, void *data)
 }
 
 static int
-newwin(struct window *w)
+winnew(struct window *w)
 {
 	struct {
 		const char *name;
@@ -1115,7 +1115,7 @@ toplevel_commit(struct surface *s)
 		if (r)
 			wl_surface_send_enter(s->resource, r);
 
-		newwin(w);
+		winnew(w);
 		w->initial_commit = 0;
 	}
 
