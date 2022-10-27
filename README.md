@@ -5,9 +5,7 @@ rio.
 
 It communicates over 9p to an `exportfs` instance running host Plan
 9 system through a pair of file descriptors (one for reading, and
-one for writing). By default, `/dev/virtio-ports/term` is opened
-for reading and writing, but you can use the `-t rfd[,wfd]` option
-to connect to file descriptors setup in advance.
+one for writing).
 
 A lightly patched version of sigrid's [c9] library is used as a 9p
 client.
@@ -20,12 +18,23 @@ client.
 wl9 [-t rfd[,wfd]] [cmd [args...]]
 ```
 
+The `-t` option specifies the file descriptors for the 9p connection.
+They should be set up in advance before running wl9, or if not
+specified, `/dev/virtio-ports/term` is opened for reading and
+writing.
+
+If `cmd [args...]` is given, it is launched as a child process after
+wl9 sets up its sockets. The first window created by the child
+will run in the existing `/mnt/wsys` instead of mounting `$wsys`.
+This has the effect of replacing the window running `exportfs`.
+Additionally, wl9 will stop automatically when it has no clients.
+
 ## Examples
 
 ### vmx
 
-Connect through a virtio-serial pipe from a unix guest to a host
-9front system.
+You can connect through a virtio-serial pipe from a unix guest to
+a host 9front system.
 
 ```
 vmx -c virtio:name:term!^<>{exportfs -r / -m 32768 >[1=0]}
@@ -37,6 +46,15 @@ setup the appropriate redirections.
 
 ```
 wl9 -t 0 <>/dev/vportNpM
+```
+
+### ssh
+
+You can use a pipeline with `exportfs` and `ssh` to remotely run a
+wayland application on a unix server that has wl9 installed.
+
+```
+exportf -r / <[0=1] | ssh host wl9 -t 0,1 cmd >[1=0]
 ```
 
 ## Wsys
@@ -71,6 +89,8 @@ Once we mount `$wsys`, wl9 opens several files:
 ## Draw
 
 ## Snarf
+
+Still kind of buggy with some applications.
 
 ## Mouse
 
