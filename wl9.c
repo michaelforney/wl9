@@ -1837,11 +1837,11 @@ keymapinit(C9ctx *ctx)
 	}
 	fid = fswalk(ctx, NULL, term.root, (const char *[]){"dev", "kbmap", 0});
 	if (fid < 0) {
-		fprintf(stderr, "walk /dev/kbmap: %s\n", aux->err);
+		fprintf(stderr, "fswalk /dev/kbmap: %s\n", aux->err);
 		return -1;
 	}
 	if (fsopen(ctx, NULL, fid, C9read) != 0) {
-		fprintf(stderr, "open /dev/kbmap: %s\n", aux->err);
+		fprintf(stderr, "fsopen /dev/kbmap: %s\n", aux->err);
 		return -1;
 	}
 	if (writekeymap(f, kbmapline, &fid) != 0)
