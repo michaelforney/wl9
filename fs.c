@@ -407,6 +407,7 @@ fswalk(C9ctx *ctx, C9tag *tagp, int fid, const char *path[])
 	if (newfid < 0) {
 		if (tagp)
 			*tagp = NOTAG;
+		snprintf(aux->err, sizeof aux->err, "%s", strerror(errno));
 		return -1;
 	}
 	if (c9walk(ctx, &tag, fid, newfid, path) != 0)
