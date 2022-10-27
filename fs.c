@@ -9,7 +9,6 @@
 #include <string.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <sys/uio.h>
 #include <unistd.h>
 #include "c9.h"
 #include "util.h"
@@ -181,81 +180,6 @@ error(C9ctx *ctx, const char *fmt, ...)
 	else
 		aux->err[n] = 0;
 }
-
-#if 0
-static struct reply *
-read9pmsg(C9ctx *ctx, int *err)
-{
-	C9aux *aux;
-	struct reply *r;
-	struct iovec iov[2];
-	size_t off, len;
-	ssize_t ret;
-
-	aux = ctx->aux;
-	r = aux->reply;
-	off = aux->replyoff;
-	if (!r) {
-		if (aux->rend - aux->rpos < 4) {
-			if (aux->rpos > aux->rbuf) {
-				memmove(aux->rbuf, aux->rpos, aux->rend - aux->rpos);
-				aux->rend = aux->rbuf + (aux->rend - aux->rpos);
-				aux->rpos = aux->rbuf;
-			}
-			do {
-				ret = read(aux->rfd, aux->rend, sizeof aux->rbuf - (aux->rend - aux->rbuf));
-				if (ret <= 0) {
-					*err = ret == 0 || errno != EAGAIN;
-					return NULL;
-				}
-				aux->rend += ret;
-			} while (aux->rend - aux->rpos < 4);
-		}
-		len = getle32(aux->rpos);
-		if (len > ctx->msize) {
-			*err = 1;
-			return NULL;
-		}
-		r = malloc(sizeof *r + len);
-		r->size = len;
-		off = aux->rend - aux->rpos;
-		if (off > len)
-			off = len;
-		memcpy(r->data, aux->rpos, off);
-		aux->rpos += off;
-		if (off == len)
-			goto done;
-		aux->reply = r;
-	}
-	/* buffer is empty, read into reply */
-	len = r->size;
-	iov[1].iov_base = aux->rbuf;
-	iov[1].iov_len = sizeof aux->rbuf;
-	for (;;) {
-		iov[0].iov_base = r->data + off;
-		iov[0].iov_len = len - off;
-		ret = readv(aux->rfd, iov, 2);
-		if (ret <= 0) {
-			*err = ret == 0 || errno != EAGAIN;
-			aux->replyoff = off;
-			return NULL;
-		}
-		if (ret > len - off) {
-			aux->rpos = aux->rbuf;
-			aux->rend = aux->rbuf + (ret - (len - off));
-			break;
-		}
-		off += ret;
-	}
-done:
-	if (c9parse(ctx, &r->r) != 0) {
-		*err = 1;
-		return NULL;
-	}
-	aux->reply = NULL;
-	return r;
-}
-#endif
 
 static int
 fsversion(C9ctx *ctx, uint32_t msize)
