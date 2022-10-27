@@ -2055,10 +2055,6 @@ main(int argc, char *argv[])
 		fprintf(stderr, "fswalk %s: %s\n", wsys, termaux.err);
 		return 1;
 	}
-	if (fsopen(&termctx, NULL, term.wsys, C9rdwr) != 0) {
-		fprintf(stderr, "fsopen %s: %s\n", wsys, termaux.err);
-		return 1;
-	}
 	free(wsys);
 
 	term.snarf = fswalk(&termctx, NULL, term.root, (const char *[]){"dev", "snarf", 0});
