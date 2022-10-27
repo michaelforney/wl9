@@ -1,5 +1,3 @@
-.POSIX:
-
 CFLAGS+=-std=c11 -Wall -Wpedantic -Wno-parentheses
 CFLAGS+=-D C9_NO_SERVER
 LIBS+=-lwayland-server
