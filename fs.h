@@ -17,7 +17,7 @@ struct C9aux {
 };
 
 int fsinit(C9ctx *ctx, C9aux *aux);
-int fsasync(C9ctx *ctx, C9tag tag, void (*fn)(C9r *, void *), void *aux);
+void fsasync(C9ctx *ctx, C9tag tag, void (*fn)(C9r *, void *), void *aux);
 C9r *fswait(C9ctx *ctx, C9tag tag, C9rtype type);
 int fsready(int fd, uint32_t mask, void *ctx);
 void fsdispatch(C9ctx *ctx);

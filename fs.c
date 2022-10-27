@@ -29,14 +29,25 @@ struct callback {
 };
 
 static C9error
-newtag(C9ctx *ctx, C9ttype type, C9tag *tag)
+newtag(C9ctx *ctx, C9ttype type, C9tag *tagp)
 {
-	int num;
+	C9aux *aux;
+	int tag;
+	struct callback *cb;
 
-	num = numget(&ctx->aux->tag);
-	if (num < 0)
+	aux = ctx->aux;
+	tag = numget(&ctx->aux->tag);
+	if (tag < 0)
 		return C9Etag;
-	*tag = num;
+	if (tag >= aux->cblen) {
+		cb = realloc(aux->cb, (tag + 1) * sizeof *aux->cb);
+		if (!cb)
+			return C9Etag;
+		memset(cb + aux->cblen, 0, (tag + 1 - aux->cblen) * sizeof *aux->cb);
+		aux->cb = cb;
+		aux->cblen = tag + 1;
+	}
+	*tagp = tag;
 	return 0;
 }
 
@@ -222,26 +233,15 @@ fsinit(C9ctx *ctx, C9aux *aux)
 	return fsversion(ctx, sizeof aux->rbuf);
 }
 
-int
+void
 fsasync(C9ctx *ctx, C9tag tag, void (*fn)(C9r *, void *), void *data)
 {
 	C9aux *aux;
-	struct callback *cb;
 
 	aux = ctx->aux;
-	if (tag >= aux->cblen) {
-		cb = realloc(aux->cb, (tag + 1) * sizeof *aux->cb);
-		if (!cb) {
-			perror(NULL);
-			return -1;
-		}
-		memset(cb + aux->cblen, 0, (tag - aux->cblen) * sizeof *aux->cb);
-		aux->cb = cb;
-		aux->cblen = tag + 1;
-	}
+	assert(tag < aux->cblen);
 	aux->cb[tag].fn = fn;
 	aux->cb[tag].aux = data;
-	return 0;
 }
 
 C9r *

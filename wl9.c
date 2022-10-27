@@ -271,8 +271,7 @@ snarfget(C9r *reply, void *aux)
 	}
 	if (fsread(&termctx, &tag, NULL, term.snarf, get->offset, 1024) != 0)
 		goto free;
-	if (fsasync(&termctx, tag, snarfget, get) != 0)
-		goto free;
+	fsasync(&termctx, tag, snarfget, get);
 	return;
 
 free:
@@ -391,8 +390,7 @@ wctlread(C9r *reply, void *data)
 	}
 	if (fsread(&termctx, &w->wctltag, NULL, w->wctl, 0, 72) != 0)
 		return;
-	if (fsasync(&termctx, w->wctltag, wctlread, w) != 0)
-		return;
+	fsasync(&termctx, w->wctltag, wctlread, w);
 	if (reply->read.size != 72) {
 		fprintf(stderr, "unexpected wctl read size: %"PRIu32" != 72\n", reply->read.size);
 		return;
@@ -525,8 +523,7 @@ mouseread(C9r *reply, void *data)
 		fprintf(stderr, "fsread %s mouse: %s\n", w->name, termaux.err);
 		return;
 	}
-	if (fsasync(&termctx, w->mousetag, mouseread, w) != 0)
-		return;
+	fsasync(&termctx, w->mousetag, mouseread, w);
 	if (reply->read.size != 49) {
 		fprintf(stderr, "unexpected mouse data: size %"PRIu32" %.*s", reply->read.size, (int)reply->read.size, reply->read.data);
 		return;
@@ -682,8 +679,7 @@ kbdread(C9r *reply, void *data)
 		fprintf(stderr, "fsread %s kbd: %s\n", w->name, reply->error);
 		return;
 	}
-	if (fsasync(&termctx, w->kbdtag, kbdread, w) != 0)
-		return;
+	fsasync(&termctx, w->kbdtag, kbdread, w);
 	pos = reply->read.data;
 	end = pos + reply->read.size;
 	while (pos && pos < end)
@@ -768,8 +764,8 @@ winnew(struct window *w)
 			fprintf(stderr, "read %s: %s\n", f->name, termaux.err);
 			goto error;
 		}
-		if (f->readcb && fsasync(&termctx, f->tag, f->readcb, w) != 0)
-			goto error;
+		if (f->readcb)
+			fsasync(&termctx, f->tag, f->readcb, w);
 	}
 	r = fswait(&termctx, files[2].tag, Rread);
 	if (!r)
@@ -1236,11 +1232,7 @@ offer_receive(struct wl_client *c, struct wl_resource *r, const char *mime, int3
 		free(get);
 		return;
 	}
-	if (fsasync(&termctx, tag, snarfget, get) != 0) {
-		close(fd);
-		free(get);
-		return;
-	}
+	fsasync(&termctx, tag, snarfget, get);
 }
 
 static void
