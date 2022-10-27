@@ -10,7 +10,9 @@
 #include <time.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <spawn.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <wayland-server.h>
 #include "arg.h"
@@ -103,6 +105,7 @@ struct snarfget {
 
 static struct wl_display *dpy;
 static struct wl_event_loop *evt;
+static struct wl_client *child;
 static const struct wl_data_offer_interface offer_impl;
 static struct {
 	struct wl_list resources;
@@ -708,12 +711,21 @@ winnew(struct window *w)
 	char aname[32];
 	C9r *r;
 
-	/* XXX: depends on exportfs patch */
-	snprintf(aname, sizeof aname, "%11d new", term.wsys);
-	w->wsys = fsattach(&termctx, aname);
-	if (w->wsys < 0) {
-		fprintf(stderr, "fsattach wsys: %s\n", termaux.err);
-		return -1;
+	if (wl_resource_get_client(w->xdgsurface) == child) {
+		w->wsys = fswalk(&termctx, NULL, term.root, (const char *[]){"dev", 0});
+		if (w->wsys < 0) {
+			fprintf(stderr, "fswalk /dev: %s\n", termaux.err);
+			return -1;
+		}
+		child = NULL;
+	} else {
+		/* XXX: depends on exportfs patch */
+		snprintf(aname, sizeof aname, "%11d new", term.wsys);
+		w->wsys = fsattach(&termctx, aname);
+		if (w->wsys < 0) {
+			fprintf(stderr, "fsattach wsys: %s\n", termaux.err);
+			return -1;
+		}
 	}
 	w->image = -1;
 
@@ -1943,6 +1955,46 @@ splitpath(char *path, const char *wname[], size_t wnamemax)
 	return NULL;
 }
 
+static void
+child_destroyed(struct wl_listener *l, void *data)
+{
+	child = NULL;
+}
+
+static void
+launch(char *argv[])
+{
+	static struct wl_listener child_destroy;
+	extern char **environ;
+	int fd[2], err;
+	char fdstr[(sizeof fd[0] * CHAR_BIT + 2) / 3 + 1];
+	pid_t pid;
+
+	if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fd) != 0) {
+		perror("socketpair");
+		exit(1);
+	}
+	if (fcntl(fd[0], F_SETFD, FD_CLOEXEC) != 0) {
+		perror("fcntl FD_CLOEXEC");
+		exit(1);
+	}
+	child = wl_client_create(dpy, fd[0]);
+	if (!child) {
+		perror("wl_client_create");
+		exit(1);
+	}
+	child_destroy.notify = child_destroyed;
+	wl_client_add_destroy_listener(child, &child_destroy);
+	snprintf(fdstr, sizeof fdstr, "%d", fd[1]);
+	setenv("WAYLAND_SOCKET", fdstr, 1);
+	err = posix_spawnp(&pid, argv[0], NULL, NULL, argv, environ);
+	if (err) {
+		fprintf(stderr, "spawn %s: %s\n", argv[0], strerror(err));
+		exit(1);
+	}
+	close(fd[1]);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1958,8 +2010,9 @@ main(int argc, char *argv[])
 		{&wl_output_interface, 4, bind_output},
 		{&org_kde_kwin_server_decoration_manager_interface, 1, bind_decoman},
 	};
+	struct wl_list *clients;
 	char *wsys, *err;
-	const char *wsyspath[C9maxpathel];
+	const char *wsyspath[C9maxpathel], *sock;
 
 	termaux.rfd = -1;
 	draw.datafd = -1;
@@ -1975,7 +2028,7 @@ main(int argc, char *argv[])
 	} ARGEND
 
 	if (termaux.rfd < 0) {
-		termaux.rfd = open("/dev/virtio-ports/term", O_RDWR);
+		termaux.rfd = open("/dev/virtio-ports/term", O_RDWR | O_CLOEXEC);
 		if (termaux.rfd < 0) {
 			perror("open /dev/virtio-ports/term");
 			return 1;
@@ -2033,10 +2086,12 @@ main(int argc, char *argv[])
 		fprintf(stderr, "failed to add 9p event source\n");
 		return 1;
 	}
-	if (!wl_display_add_socket_auto(dpy)) {
+	sock = wl_display_add_socket_auto(dpy);
+	if (!sock) {
 		fprintf(stderr, "failed to add socket\n");
 		return 1;
 	}
+	setenv("WAYLAND_DISPLAY", sock, 1);
 	if (wl_display_init_shm(dpy) != 0) {
 		fprintf(stderr, "failed to init shm\n");
 		return 1;
@@ -2050,7 +2105,10 @@ main(int argc, char *argv[])
 	wl_list_init(&output.resources);
 	wl_list_init(&datadev.resources);
 
-	for (;;) {
+	if (argc)
+		launch(argv);
+	clients = wl_display_get_client_list(dpy);
+	while (!argc || !wl_list_empty(clients)) {
 		wl_display_flush_clients(dpy);
 		wl_event_loop_dispatch(evt, -1);
 		fsdispatch(&termctx);
