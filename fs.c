@@ -261,19 +261,18 @@ fswait(C9ctx *ctx, C9tag tag, C9rtype type)
 	}
 	pfd.fd = aux->rfd;
 	pfd.events = POLLIN;
-	aux->ready = 1;
+	aux->ready = 0;
 	for (;;) {
-		if (c9proc(ctx) != 0) {
-			fprintf(stderr, "c9proc: %s\n", aux->err);
-			exit(1);
-		}
-		if (!aux->ready) {
+		while (!aux->ready) {
 			if (poll(&pfd, 1, -1) != 1) {
 				perror("poll");
 				exit(1);
 			}
 			aux->ready = 1;
-			continue;
+			if (c9proc(ctx) != 0) {
+				fprintf(stderr, "c9proc: %s\n", aux->err);
+				exit(1);
+			}
 		}
 		r = aux->queue;
 		if (r->r.tag == tag) {
