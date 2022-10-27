@@ -103,6 +103,7 @@ struct snarfget {
 
 static struct wl_display *dpy;
 static struct wl_event_loop *evt;
+static const struct wl_data_offer_interface offer_impl;
 static struct {
 	struct wl_list resources;
 } output;
@@ -144,7 +145,6 @@ static struct {
 
 static C9aux termaux;
 static C9ctx termctx;
-static const struct wl_data_offer_interface offer_impl;
 
 static void
 drawcopy(struct drawcopy *d)
