@@ -9,8 +9,8 @@ one for writing). By default, `/dev/virtio-ports/term` is opened
 for reading and writing, but you can use the `-t rfd[,wfd]` option
 to connect to file descriptors setup in advance.
 
-A lightly patched version of sigrid's [c9] library is used for as
-a 9p client.
+A lightly patched version of sigrid's [c9] library is used as a 9p
+client.
 
 [c9]: http://shithub.us/sigrid/c9/HEAD/info.html
 
