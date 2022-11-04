@@ -133,6 +133,9 @@ static struct {
 	int wsys;
 	/* /dev/snarf fid */
 	int snarf;
+
+	struct wl_event_source *event;
+	uint32_t eventmask;
 } term;
 static struct {
 	int ctlfid;
@@ -1987,6 +1990,19 @@ launch(char *argv[])
 	close(fd[1]);
 }
 
+static int
+fsready(int fd, uint32_t mask, void *ptr)
+{
+	C9ctx *ctx;
+
+	ctx = ptr;
+	if (mask & WL_EVENT_WRITABLE)
+		fswriteT(ctx);
+	if (mask & WL_EVENT_READABLE)
+		fsreadR(ctx);
+	return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2005,6 +2021,7 @@ main(int argc, char *argv[])
 	struct wl_list *clients;
 	char *wsys, *err;
 	const char *wsyspath[C9maxpathel], *sock;
+	uint32_t mask;
 
 	termaux.rfd = -1;
 	draw.datafd = -1;
@@ -2070,7 +2087,8 @@ main(int argc, char *argv[])
 		return 1;
 	}
 	evt = wl_display_get_event_loop(dpy);
-	if (!wl_event_loop_add_fd(evt, termaux.rfd, WL_EVENT_READABLE, fsready, &termctx)) {
+	term.event = wl_event_loop_add_fd(evt, termaux.rfd, WL_EVENT_READABLE, fsready, &termctx);
+	if (!term.event) {
 		fprintf(stderr, "failed to add 9p event source\n");
 		return 1;
 	}
@@ -2100,5 +2118,10 @@ main(int argc, char *argv[])
 		wl_display_flush_clients(dpy);
 		wl_event_loop_dispatch(evt, -1);
 		fsdispatch(&termctx);
+		mask = WL_EVENT_READABLE;
+		if (termaux.wend > termaux.wpos)
+			mask |= WL_EVENT_WRITABLE;
+		if (mask != term.eventmask)
+			wl_event_source_fd_update(term.event, mask);
 	}
 }

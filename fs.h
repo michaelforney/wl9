@@ -19,7 +19,8 @@ struct C9aux {
 int fsinit(C9ctx *ctx, C9aux *aux);
 void fsasync(C9ctx *ctx, C9tag tag, void (*fn)(C9r *, void *), void *aux);
 C9r *fswait(C9ctx *ctx, C9tag tag, C9rtype type);
-int fsready(int fd, uint32_t mask, void *ctx);
+void fsreadR(C9ctx *ctx);
+void fswriteT(C9ctx *ctx);
 void fsdispatch(C9ctx *ctx);
 
 int fsflush(C9ctx *ctx, C9tag oldtag);

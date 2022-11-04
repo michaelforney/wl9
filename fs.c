@@ -58,7 +58,7 @@ freetag(C9ctx *ctx, C9tag tag)
 }
 
 static void
-write9p(C9ctx *ctx)
+write9p(C9ctx *ctx, int block)
 {
 	C9aux *aux;
 	ssize_t ret;
@@ -69,6 +69,8 @@ write9p(C9ctx *ctx)
 		ret = write(aux->wfd, aux->wpos, aux->wend - aux->wpos);
 		if (ret < 0) {
 			if (errno == EAGAIN) {
+				if (!block)
+					return;
 				pfd.fd = aux->wfd;
 				pfd.events = POLLOUT;
 				poll(&pfd, 1, -1);
@@ -119,7 +121,7 @@ begin(C9ctx *ctx, uint32_t size)
 	aux = ctx->aux;
 	assert(size <= sizeof aux->wbuf);
 	if (size > aux->wbuf + sizeof aux->wbuf - aux->wend)
-		write9p(ctx);
+		write9p(ctx, 1);
 	buf = aux->wend;
 	aux->wend += size;
 	return buf;
@@ -251,7 +253,7 @@ fswait(C9ctx *ctx, C9tag tag, C9rtype type)
 	struct reply *r, **rp;
 	struct pollfd pfd;
 
-	write9p(ctx);
+	write9p(ctx, 1);
 	aux = ctx->aux;
 	for (rp = &aux->queue; (r = *rp); rp = &r->next) {
 		if (r->r.tag == tag) {
@@ -294,13 +296,17 @@ found:
 	return &r->r;
 }
 
-int
-fsready(int fd, uint32_t mask, void *data)
+void
+fswriteT(C9ctx *ctx)
 {
-	C9ctx *ctx;
+	write9p(ctx, 0);
+}
+
+void
+fsreadR(C9ctx *ctx)
+{
 	C9aux *aux;
 
-	ctx = data;
 	aux = ctx->aux;
 	aux->ready = 1;
 	do {
@@ -309,7 +315,6 @@ fsready(int fd, uint32_t mask, void *data)
 			exit(1);
 		}
 	} while (aux->ready);
-	return 0;
 }
 
 void
@@ -337,7 +342,7 @@ fsdispatch(C9ctx *ctx)
 		freetag(ctx, r->r.tag);
 		free(r);
 	}
-	write9p(ctx);
+	write9p(ctx, 0);
 }
 
 int
