@@ -17,6 +17,7 @@
 #include <wayland-server.h>
 #include "arg.h"
 #include "c9.h"
+#include "draw.h"
 #include "keymap.h"
 #include "util.h"
 #include "fs.h"
@@ -25,16 +26,11 @@
 
 #define BORDER 4
 
-struct damage {
-	int x0, y0;
-	int x1, y1;
-};
-
 struct surface_state {
 	struct wl_resource *buffer;
 	struct wl_listener buffer_destroy;
 	struct wl_list callbacks;
-	struct damage damage;
+	struct rect damage;
 };
 
 struct surface {
@@ -50,7 +46,7 @@ struct region {
 
 struct window {
 	struct surface *surface;
-	struct wl_resource *xdgsurface;
+	struct wl_resource *resource;
 	struct wl_resource *toplevel;
 	struct wl_listener surface_destroy;
 	uint32_t serial;
@@ -77,15 +73,12 @@ struct window {
 	C9tag wctltag;
 	C9tag mousetag;
 	C9tag kbdtag;
-
-	/* /dev/draw image id */
-	int image;
 };
 
 struct drawcopy {
 	struct window *w;
 	struct wl_shm_buffer *b;
-	struct damage d;
+	struct rect d;
 	int x, y;
 	int dx, dy;
 };
@@ -137,85 +130,9 @@ static struct {
 	struct wl_event_source *event;
 	uint32_t eventmask;
 } term;
-static struct {
-	int ctlfid;
-	int datafid;
-	int datafd;
-
-	int x0, y0;
-	int x1, y1;
-	unsigned char *buf;
-	size_t buflen;
-	struct numtab imgid;
-} draw;
 
 static C9aux termaux;
 static C9ctx termctx;
-
-static void
-drawcopy(struct drawcopy *d)
-{
-	int x, y, x0, y0, x1, y1;
-	unsigned char *img, *buf, *pos;
-	size_t n, stride;
-	int done;
-	C9tag tag;
-	struct wl_resource *r, *tmp;
-
-	x = d->x, y = d->y;
-	stride = wl_shm_buffer_get_stride(d->b);
-	img = wl_shm_buffer_get_data(d->b);
-	img += x * 4 + y * stride;
-	buf = draw.buf;
-	*buf++ = 'y';
-	buf = putle32(buf, d->w->image);
-	tag = -1;
-	for (done = 0; !done;) {
-		x0 = x;
-		x1 = x + d->dx;
-		if (x1 > d->d.x1)
-			x1 = d->d.x1;
-
-		y0 = y;
-		y1 = y + d->dy;
-		if (y1 > d->d.y1)
-			y1 = d->d.y1;
-
-		pos = putle32(buf, d->w->x0 + x0);
-		pos = putle32(pos, d->w->y0 + y0);
-		pos = putle32(pos, d->w->x0 + x1);
-		pos = putle32(pos, d->w->y0 + y1);
-		n = (x1 - x0) * 4;
-		for (; y < y1; ++y)
-			memcpy(pos, img, n), pos += n, img += stride;
-		if (x1 < d->d.x1)
-			x = x1, --y;
-		else
-			x = d->d.x0;
-		if (y == d->d.y1) {
-			done = 1;
-			*pos++ = 'v';
-		}
-
-		if (fswrite(&termctx, &tag, draw.datafid, 0, draw.buf, pos - draw.buf) != 0) {
-			fprintf(stderr, "fswrite %s draw: %s\n", d->w->name, termaux.err);
-			break;
-		}
-	}
-	assert(tag != -1);
-	free(fswait(&termctx, tag, Rwrite));
-
-	d->x = x;
-	d->y = y;
-	d->w->surface->pending.damage.x0 = -1;
-	d->w->surface->pending.damage.y0 = -1;
-	d->w->surface->pending.damage.x1 = -1;
-	d->w->surface->pending.damage.y1 = -1;
-	wl_resource_for_each_safe(r, tmp, &d->w->surface->state.callbacks) {
-		wl_callback_send_done(r, 0);
-		wl_resource_destroy(r);
-	}
-}
 
 static int
 snarfput(int fd, uint32_t mask, void *data)
@@ -289,7 +206,7 @@ snarfoffer(struct window *w)
 	struct wl_client *c;
 	uint32_t ver;
 
-	c = wl_resource_get_client(w->xdgsurface);
+	c = wl_resource_get_client(w->resource);
 	r = wl_resource_find_for_client(&datadev.resources, c);
 	if (!r)
 		return;
@@ -330,7 +247,7 @@ mousefocus(struct window *w, int x, int y)
 		wl_list_init(&mouse.active);
 	}
 	if (w) {
-		c = wl_resource_get_client(w->xdgsurface);
+		c = wl_resource_get_client(w->resource);
 		s = w->surface->resource;
 		wl_resource_for_each_safe(r, tmp, &mouse.inactive) {
 			if (wl_resource_get_client(r) != c)
@@ -362,7 +279,7 @@ kbdfocus(struct window *w)
 		wl_list_init(&kbd.active);
 	}
 	if (w) {
-		c = wl_resource_get_client(w->xdgsurface);
+		c = wl_resource_get_client(w->resource);
 		s = w->surface->resource;
 		wl_resource_for_each_safe(r, tmp, &kbd.inactive) {
 			if (wl_resource_get_client(r) != c)
@@ -380,9 +297,8 @@ wctlread(C9r *reply, void *data)
 {
 	static struct wl_array states;
 	struct window *w;
-	char *pos, *current, *hidden, buf[sizeof w->name + 6];
+	char *pos, *current, *hidden;
 	int x0, y0, x1, y1, needconfig;
-	size_t namelen;
 	C9r *r;
 
 	w = data;
@@ -398,12 +314,13 @@ wctlread(C9r *reply, void *data)
 		fprintf(stderr, "unexpected wctl read size: %"PRIu32" != 72\n", reply->read.size);
 		return;
 	}
+	fprintf(stderr, "wctl %.*s\n", (int)reply->read.size, reply->read.data);
 	pos = (char *)reply->read.data;
 	pos[71] = '\0';
-	x0 = strtol(pos, &pos, 10) + BORDER;
-	y0 = strtol(pos, &pos, 10) + BORDER;
-	x1 = strtol(pos, &pos, 10) - BORDER;
-	y1 = strtol(pos, &pos, 10) - BORDER;
+	x0 = strtol(pos, &pos, 10);
+	y0 = strtol(pos, &pos, 10);
+	x1 = strtol(pos, &pos, 10);
+	y1 = strtol(pos, &pos, 10);
 	current = strtok_r(pos, " ", &pos);
 	hidden = strtok_r(NULL, " ", &pos);
 	needconfig = 0;
@@ -415,52 +332,19 @@ wctlread(C9r *reply, void *data)
 		w->x1 = x1, w->y1 = y1;
 		if (fsread(&termctx, NULL, &r, w->winname, 0, 31) != 0 || r->read.size > 31)
 			return;
-		namelen = r->read.size;
-		memcpy(w->name, r->read.data, namelen);
-		w->name[namelen] = '\0';
+		memcpy(w->name, r->read.data, r->read.size);
+		w->name[r->read.size] = '\0';
 		free(r);
 
-		pos = buf;
-		if (w->image >= 0) {
-			*pos++ = 'f';
-			pos = putle32(pos, w->image);
-		} else {
-			w->image = numget(&draw.imgid);
-			if (w->image < 0)
-				return;
-		}
-		*pos++ = 'n';
-		pos = putle32(pos, w->image);
-		*pos++ = namelen;
-		memcpy(pos, w->name, namelen), pos += namelen;
-		assert(pos - buf < sizeof buf);
-		if (fswrite(&termctx, NULL, draw.datafid, 0, buf, pos - buf) != 0) {
-			fprintf(stderr, "fswrite %s draw: %s\n", w->name, termaux.err);
-			return;
-		}
+		drawattach(w->resource, w->name, w->x1 - w->x0, w->y1 - w->y0);
 		if (!needconfig) {
-			struct drawcopy d;
-			size_t n;
-
-			d.w = w;
-			d.b = wl_shm_buffer_get(w->surface->pending.buffer);
-			if (!d.b)
-				return;
-			d.d.x0 = 0;
-			d.d.y0 = 0;
-			d.d.x1 = x1 - x0;
-			d.d.y1 = y1 - y0;
-			d.x = d.d.x0;
-			d.y = d.d.y0;
-			d.dx = d.d.x1 - d.d.x0;
-			n = draw.buflen - 22;
-			if (n < 4 * d.dx) {
-				d.dx = (4 * d.dx + n - 1) / n;
-				d.dy = 1;
-			} else {
-				d.dy = n / (4 * d.dx);
-			}
-			drawcopy(&d);
+			struct rect r = {
+				.x0 = BORDER,
+				.y0 = BORDER,
+				.x1 = w->x1 - w->x0 - BORDER,
+				.y1 = w->y1 - w->y0 - BORDER,
+			};
+			draw(w->resource, r, w->surface->state.buffer, 0, 0);
 		}
 	}
 	if (w->current != (strcmp(current, "current") == 0)) {
@@ -484,9 +368,9 @@ wctlread(C9r *reply, void *data)
 		addstate(&states, XDG_TOPLEVEL_STATE_MAXIMIZED);
 		if (w->current)
 			addstate(&states, XDG_TOPLEVEL_STATE_ACTIVATED);
-		xdg_toplevel_send_configure(w->toplevel, x1 - x0, y1 - y0, &states);
+		xdg_toplevel_send_configure(w->toplevel, x1 - x0 - 2 * BORDER, y1 - y0 - 2 * BORDER, &states);
 		w->serial = wl_display_next_serial(dpy);
-		xdg_surface_send_configure(w->xdgsurface, w->serial);
+		xdg_surface_send_configure(w->resource, w->serial);
 	}
 }
 
@@ -536,8 +420,8 @@ mouseread(C9r *reply, void *data)
 	if (*pos != 'm')
 		return;
 	++pos;
-	x = strtoul(pos, &pos, 10) - w->x0;
-	y = strtoul(pos, &pos, 10) - w->y0;
+	x = strtoul(pos, &pos, 10) - (w->x0 + BORDER);
+	y = strtoul(pos, &pos, 10) - (w->y0 + BORDER);
 	b = strtoul(pos, &pos, 10);
 	t = strtoul(pos, &pos, 10);
 	if (mouse.focus != w) {
@@ -710,7 +594,7 @@ winnew(struct window *w)
 	char aname[32];
 	C9r *r;
 
-	if (wl_resource_get_client(w->xdgsurface) == child) {
+	if (wl_resource_get_client(w->resource) == child) {
 		w->wsys = fswalk(&termctx, NULL, term.root, (const char *[]){"dev", 0});
 		if (w->wsys < 0) {
 			fprintf(stderr, "fswalk /dev: %s\n", termaux.err);
@@ -726,7 +610,6 @@ winnew(struct window *w)
 			return -1;
 		}
 	}
-	w->image = -1;
 
 	for (f = files; f < files + LEN(files); f++) {
 		f->clunk = 0;
@@ -817,7 +700,7 @@ static void
 damage(struct wl_client *c, struct wl_resource *r, int32_t x0, int32_t y0, int32_t w, int32_t h)
 {
 	struct surface *s;
-	struct damage *d;
+	struct rect *d;
 	int x1, y1;
 
 	x1 = x0 + w;
@@ -1112,22 +995,38 @@ static void
 toplevel_commit(struct surface *s)
 {
 	struct window *w;
-	struct drawcopy d;
-	struct wl_resource *r;
+	struct wl_resource *or, *tmp;
 	struct wl_client *c;
-	size_t n;
+	struct rect r;
 
 	w = wl_resource_get_user_data(s->role);
 	if (w->initial_commit) {
-		c = wl_resource_get_client(w->xdgsurface);
-		r = wl_resource_find_for_client(&output.resources, c);
-		if (r)
-			wl_surface_send_enter(s->resource, r);
+		c = wl_resource_get_client(w->resource);
+		or = wl_resource_find_for_client(&output.resources, c);
+		if (or)
+			wl_surface_send_enter(s->resource, or);
 
 		winnew(w);
 		w->initial_commit = 0;
 	}
 
+	if (!s->pending.buffer)
+		return;
+	r = s->pending.damage;
+	r.x0 += BORDER;
+	r.y0 += BORDER;
+	r.x1 += BORDER;
+	r.y1 += BORDER;
+	draw(w->resource, r, s->pending.buffer, r.x0 - BORDER, r.y0 - BORDER);
+	s->pending.damage.x0 = -1;
+	s->pending.damage.y0 = -1;
+	s->pending.damage.x1 = -1;
+	s->pending.damage.y1 = -1;
+	wl_resource_for_each_safe(or, tmp, &s->state.callbacks) {
+		wl_callback_send_done(or, 0);
+		wl_resource_destroy(or);
+	}
+	/*
 	d.w = w;
 	d.b = wl_shm_buffer_get(s->pending.buffer);
 	if (!d.b)
@@ -1150,13 +1049,13 @@ toplevel_commit(struct surface *s)
 		d.dy = n / (4 * d.dx);
 	}
 	drawcopy(&d);
+	*/
 }
 
 static void
 toplevel_destroy(struct wl_resource *r)
 {
 	struct window *w;
-	char buf[5];
 
 	w = wl_resource_get_user_data(r);
 	if (w->wsys != -1) {
@@ -1172,12 +1071,6 @@ toplevel_destroy(struct wl_resource *r)
 		fsclunk(&termctx, w->kbd);
 		if (w->kbdtag != -1)
 			fsflush(&termctx, w->kbdtag);
-	}
-	if (w->image != -1) {
-		buf[0] = 'f';
-		putle32(buf + 1, w->image);
-		if (fswrite(&termctx, NULL, draw.datafid, 0, buf, sizeof buf) != 0)
-			fprintf(stderr, "fswrite %s draw: %s\n", w->name, strerror(errno));
 	}
 	w->toplevel = NULL;
 	w->surface->role = NULL;
@@ -1314,7 +1207,7 @@ xdgsurface_surface_destroyed(struct wl_listener *listener, void *data)
 	struct window *w;
 
 	w = wl_container_of(listener, w, surface_destroy);
-	wl_resource_destroy(w->xdgsurface);
+	wl_resource_destroy(w->resource);
 }
 
 static void
@@ -1420,8 +1313,8 @@ get_xdg_surface(struct wl_client *c, struct wl_resource *r, uint32_t id, struct 
 	if (!w)
 		goto error;
 	ver = wl_resource_get_version(r);
-	w->xdgsurface = wl_resource_create(c, &xdg_surface_interface, ver, id);
-	if (!w->xdgsurface)
+	w->resource = wl_resource_create(c, &xdg_surface_interface, ver, id);
+	if (!w->resource)
 		goto error;
 	wl_array_init(&w->keys);
 	w->surface = s;
@@ -1437,7 +1330,7 @@ get_xdg_surface(struct wl_client *c, struct wl_resource *r, uint32_t id, struct 
 	w->mousetag = -1;
 	w->kbd = -1;
 	w->kbdtag = -1;
-	wl_resource_set_implementation(w->xdgsurface, &xdg_surface_impl, w, xdg_surface_destroy);
+	wl_resource_set_implementation(w->resource, &xdg_surface_impl, w, xdg_surface_destroy);
 	return;
 
 error:
@@ -1504,7 +1397,7 @@ get_pointer(struct wl_client *c, struct wl_resource *r, uint32_t id)
 	}
 	wl_resource_set_implementation(nr, &pointer_impl, NULL, unlink_resource);
 	w = mouse.focus;
-	active = w && wl_resource_get_client(r) == wl_resource_get_client(w->xdgsurface);
+	active = w && wl_resource_get_client(r) == wl_resource_get_client(w->resource);
 	wl_list_insert(active ? &mouse.active : &mouse.inactive, wl_resource_get_link(nr));
 }
 
@@ -1525,7 +1418,7 @@ get_keyboard(struct wl_client *c, struct wl_resource *r, uint32_t id)
 	wl_resource_set_implementation(nr, &keyboard_impl, NULL, unlink_resource);
 	wl_keyboard_send_keymap(nr, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, kbd.keymapfd, kbd.keymapsize);
 	w = kbd.focus;
-	active = w && wl_resource_get_client(r) == wl_resource_get_client(w->xdgsurface);
+	active = w && wl_resource_get_client(r) == wl_resource_get_client(w->resource);
 	wl_list_insert(active ? &kbd.active : &kbd.inactive, wl_resource_get_link(nr));
 }
 
@@ -1685,7 +1578,7 @@ bind_output(struct wl_client *c, void *p, uint32_t ver, uint32_t id)
 	wl_resource_set_implementation(r, NULL, NULL, unlink_resource);
 	wl_list_insert(&output.resources, wl_resource_get_link(r));
 	wl_output_send_geometry(r, 0, 0, 0, 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, "plan9", "rio", WL_OUTPUT_TRANSFORM_NORMAL);
-	wl_output_send_mode(r, WL_OUTPUT_MODE_CURRENT, draw.x1 - draw.x0, draw.y1 - draw.y0, 0);
+	wl_output_send_mode(r, WL_OUTPUT_MODE_CURRENT, 1440, 900, 0);
 	wl_output_send_done(r);
 }
 
@@ -1733,74 +1626,6 @@ bind_decoman(struct wl_client *c, void *p, uint32_t ver, uint32_t id)
 	}
 	wl_resource_set_implementation(r, &decoman_impl, NULL, NULL);
 	org_kde_kwin_server_decoration_manager_send_default_mode(r, ORG_KDE_KWIN_SERVER_DECORATION_MODE_SERVER);
-}
-
-static int
-drawinit(C9ctx *ctx)
-{
-	C9aux *aux;
-	C9r *r;
-	C9tag tag;
-	char conn[12];
-
-	aux = ctx->aux;
-	if (numget(&draw.imgid) != 0) {
-		perror(NULL);
-		return -1;
-	}
-
-	draw.buflen = 32768;
-	if (draw.datafd < 0) {
-		draw.ctlfid = fswalk(ctx, NULL, draw.datafid, (const char *[]){"dev", "draw", "new", 0});
-		if (draw.ctlfid < 0) {
-			fprintf(stderr, "fswalk /dev/draw/new: %s\n", aux->err);
-			return -1;
-		}
-		if (fsopen(ctx, NULL, draw.ctlfid, C9read) != 0) {
-			fprintf(stderr, "fsopen /dev/draw/new: %s\n", aux->err);
-			return -1;
-		}
-		if (fsread(ctx, NULL, &r, draw.ctlfid, 0, 144) != 0) {
-			fprintf(stderr, "fsread /dev/draw/new: %s\n", aux->err);
-			return -1;
-		}
-		if (r->read.size < 96) {
-			fprintf(stderr, "fsread /dev/draw/new: too short\n");
-			return -1;
-		}
-		r->read.data[11] = '\0';
-		strcpy(conn, (char *)r->read.data + strspn((char *)r->read.data, " "));
-		r->read.data[96] = '\0';
-		draw.x0 = atoi((char *)r->read.data + 48);
-		draw.y0 = atoi((char *)r->read.data + 60);
-		draw.x1 = atoi((char *)r->read.data + 72);
-		draw.y1 = atoi((char *)r->read.data + 84);
-		free(r);
-		draw.datafid = fswalk(ctx, NULL, term.root, (const char *[]){"dev", "draw", conn, "data", 0});
-		if (draw.datafid < 0) {
-			fprintf(stderr, "fswalk /dev/draw/%s/data: %s\n", conn, aux->err);
-			return -1;
-		}
-		if (fsopen(ctx, &tag, draw.datafid, C9write) != 0) {
-			fprintf(stderr, "fsopen /dev/draw/%s/data: %s\n", conn, aux->err);
-			return -1;
-		}
-		r = fswait(ctx, tag, Ropen);
-		if (!r) {
-			fprintf(stderr, "fsopen /dev/draw/%s/data: %s\n", conn, aux->err);
-			return -1;
-		}
-		if (r->iounit)
-			draw.buflen = r->iounit;
-		free(r);
-	}
-	draw.buf = malloc(draw.buflen);
-	if (!draw.buf) {
-		perror(NULL);
-		return -1;
-	}
-
-	return 0;
 }
 
 static int
@@ -2003,6 +1828,27 @@ fsready(int fd, uint32_t mask, void *ptr)
 	return 0;
 }
 
+static void
+draw_notify(struct wl_listener *l, void *p)
+{
+	struct wl_resource *r, *tmp;
+	struct window *w;
+	struct surface *s;
+
+	r = p;
+	w = wl_resource_get_user_data(r);
+	s = w->surface;
+	wl_resource_for_each_safe(r, tmp, &s->state.callbacks) {
+		wl_callback_send_done(r, 0);
+		wl_resource_destroy(r);
+	}
+	wl_list_init(&w->surface->state.callbacks);
+}
+
+static struct wl_listener draw_listener = {
+	.notify = draw_notify,
+};
+
 int
 main(int argc, char *argv[])
 {
@@ -2024,13 +1870,9 @@ main(int argc, char *argv[])
 	uint32_t mask;
 
 	termaux.rfd = -1;
-	draw.datafd = -1;
 	ARGBEGIN {
 	case 't':
 		fdpair(EARGF(usage()), &termaux.rfd, &termaux.wfd);
-		break;
-	case 'd':
-		fdpair(EARGF(usage()), &draw.datafd, NULL);
 		break;
 	default:
 		usage();
@@ -2072,8 +1914,14 @@ main(int argc, char *argv[])
 	if (fsopen(&termctx, NULL, term.snarf, C9read) != 0)
 		return 1;
 
-	if (drawinit(&termctx) != 0)
+#ifdef HAVE_VIRTGPU
+	if (drawgpuinit() != 0)
+#endif
+	//if (draw9pinit() != 0)	
 		return 1;
+	
+	wl_signal_add(&drawdone, &draw_listener);
+
 	if (keymapinit(&termctx) != 0)
 		return 1;
 	wl_list_init(&mouse.active);
